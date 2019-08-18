@@ -5,11 +5,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="ie=edge">
-  <title>MVVM 单向绑定</title>
+  <title>MVVM 双向绑定</title>
 </head>
 
 <body>
   <div id="app">
+    <input v-model="name" type="text">
     <h1>{{name}} 's is {{age}}</h1>
   </div>
 
@@ -19,24 +20,23 @@
       if (!data || typeof data !== 'object') return
       for (var key in data) {
         let val = data[key]
-        let subject = new Subject() //局部变量，闭包
+        let subject = new Subject()
         Object.defineProperty(data, key, {
           enumerable: true,
           configurable: true,
           get: function () {
-            //如果当前观察者存在，去订阅主题
             if (currentObserver) {
               currentObserver.subscribeTo(subject)
             }
             return val
           },
-          set: function(newVal) {
+          set: function (newVal) {
             val = newVal
-            //告诉订阅这个属性的所有观察者，都去更新
+
             subject.notify()
           }
         })
-        if(typeof val === 'object') {
+        if (typeof val === 'object') {
           observe(val)
         }
       }
@@ -56,13 +56,13 @@
       }
       removeObserver(observer) {
         var index = this.observers.indexOf(observer)
-        if(index > -1) {
+        if (index > -1) {
           this.observers.splice(index, 1)
         }
       }
       notify() {
         this.observers.forEach(observer => {
-          observer.update() //订阅过我的观察者去执行自己的 update()
+          observer.update()
         })
       }
     }
@@ -70,74 +70,99 @@
     //创建观察者
     class Observer {
       constructor(vm, key, cb) {
-        this.subjects = {} //我订阅的主题
-        this.vm = vm //mvvm 对象
-        this.key = key //属性
-        this.cb = cb //订阅之后去做的事情
-        this.value = this.getValue() //获取到真实的值时，去订阅这个主题
+        this.subjects = {}
+        this.vm = vm
+        this.key = key
+        this.cb = cb
+        this.value = this.getValue()
       }
       update() {
-        let oldVal = this.value //修改前的值
-        let value = this.getValue() //修改后的值，再次调用 get ，get 中的值已是 set 后的值了
-        if(value !== oldVal) {
-          this.value = value //新值赋值给 this.value
-          this.cb.bind(this.vm)(value,oldVal) //调用回调函数，传递 value,oldVal 绑定this为 mvvm 对象
+        let oldVal = this.value
+        let value = this.getValue()
+        if (value !== oldVal) {
+          this.value = value
+          this.cb.bind(this.vm)(value, oldVal)
         }
       }
       subscribeTo(subject) {
-        if(!this.subjects[subject.id]) {
-          subject.addObserver(this) //把观察者添加到主题中
-          this.subjects[subject.id] = subject //把主题添加到我的订阅列表中
+        if (!this.subjects[subject.id]) {
+          subject.addObserver(this)
+          this.subjects[subject.id] = subject
         }
       }
       getValue() {
-        currentObserver = this //把我变成当前的观察者
-        let value = this.vm.$data[this.key] //调用 observe(data) 中的 get 方法
-        currentObserver = null //我已经订阅过了，所以去掉当前观察者的身份
+        currentObserver = this
+        let value = this.vm.$data[this.key]
+        currentObserver = null
         return value
       }
     }
 
+    class Compile {
+      constructor(vm) {
+        this.vm = vm
+        this.node = vm.$el
+        this.compile()
+      }
+      compile() {
+        this.traverse(this.node)
+      }
+      traverse(node) {
+        if (node.nodeType === 1) { //div
+          this.compileNode(node) //解析节点上的 v-model 属性
+          node.childNodes.forEach(childNode => {
+            this.traverse(childNode) //递归
+          })
+        } else if (node.nodeType === 3) { //处理文本
+          this.compileText(node)
+        }
+      }
+      //处理指令
+      compileNode(node) {
+        let attrs = [...node.attributes] //类数组对象转换成数组
+        attrs.forEach(attr => { //attr 是个对象，attr.name 是属性的名字如 v-model， attr.value 是对应的值，如 name
+          if (this.isDirective(attr.name)) {
+            let key = attr.value //attr.value === 'name'
+            node.value = this.vm.$data[key] ////把 data 中 name 属性对应的值赋值给 input 元素
+            new Observer(this.vm, key, function (newVal) {
+              node.value = newVal ////再创建一个观察者，监听到 data 中的数据发生变化时，把新值赋值给 node.value
+            })
+            //把输入内容赋值给 data 中的 name 属性对应的值，data 一更新，所有监听 data 的订阅者就会更新...
+            //因为是箭头函数，所以这里的 this 是 compile 对象
+            node.oninput = (e) => {
+              this.vm.$data[key] = e.target.value
+            }
+          }
+        })
+      }
+      //判断属性名是否是指令，比如 type 就不是指令
+      isDirective(attrName) {
+        return attrName === 'v-model'
+      }
+      compileText(node) {
+        let reg = /{{(.+?)}}/g
+        let match
+        while (match = reg.exec(node.nodeValue)) {
+          let raw = match[0]
+          let key = match[1].trim()
+          node.nodeValue = node.nodeValue.replace(raw, this.vm.$data[key])
+          new Observer(this.vm, key, function (val, oldVal) {
+            node.nodeValue = node.nodeValue.replace(oldVal, val)
+          })
+        }
+      }
+
+    }
 
     class mvvm {
       constructor(opts) {
         this.init(opts)
         observe(this.$data)
-        this.compile()
+        new Compile(this) //内容过多，抽离出来
       }
-      //初始化，数据暂存起来
       init(opts) {
         this.$el = document.querySelector(opts.el)
         this.$data = opts.data
-        this.observers = []
-      }
-      //对模板进行解析
-      compile() {
-        this.traverse(this.$el)
-      }
-      //遍历模板，可能有多层，需要用到递归
-      traverse(node) {
-        if (node.nodeType === 1) { //div
-          node.childNodes.forEach(childNode => {
-            this.traverse(childNode) //递归
-          })
-        } else if (node.nodeType === 3) { //文本
-          this.renderText(node)
-        }
-      }
-      //渲染模板，替换成真实的数据
-      renderText(node) {
-        let reg = /{{(.+?)}}/g
-        let match
-        while (match = reg.exec(node.nodeValue)) { //循环两次，拿到 [{{name}}, name], [{{age}}, age]
-          let raw = match[0] //{{name}} {{age}}
-          let key = match[1].trim() //name age,删除字符串两端的空白字符
-          node.nodeValue = node.nodeValue.replace(raw, this.$data[key]) //字符串替换成对应的数据
-          //解析模板时，遇到了变量，就创建一个观察者
-          new Observer(this, key, function(val, oldVal) {
-            node.nodeValue = node.nodeValue.replace(oldVal, val) //cb回调函数，新值与旧值做替换
-          })
-        }
       }
     }
 
@@ -148,11 +173,6 @@
         age: 3
       }
     })
-
-    //修改数据
-    setInterval(function() {
-      vm.$data.age++
-    },1000)
   </script>
 </body>
 

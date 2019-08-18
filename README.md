@@ -752,6 +752,210 @@ data 里的name会和视图中的{{name}}一一映射，修改 data 里的值，
 以上就是单向绑定的实现。
 
 
+### 实现双向绑定
+
+修改视图，还会反馈到数据上
+
+场景：input 修改那些表单
+
+```
+<div id="app" >
+  <input v-model="name" type="text">
+  <h1>{{name}} 's age is {{age}}</h1>
+</div>
+```
+
+如何把 input 的内容反馈到数据里呢？
+
+v-model="name" 这种语法标记 name 属性
+当用户修改 input 的时候，值会传递到 name 属性对应的值上
+name 属性对应的值一修改，又会反馈到 h1 中
+
+以上是数据双向传递的过程
+
+完整代码
+
+```
+<body>
+  <div id="app">
+    <input v-model="name" type="text">
+    <h1>{{name}} 's is {{age}}</h1>
+  </div>
+
+  <script>
+    //监听数据
+    function observe(data) {
+      if (!data || typeof data !== 'object') return
+      for (var key in data) {
+        let val = data[key]
+        let subject = new Subject()
+        Object.defineProperty(data, key, {
+          enumerable: true,
+          configurable: true,
+          get: function () {
+            if (currentObserver) {
+              currentObserver.subscribeTo(subject)
+            }
+            return val
+          },
+          set: function (newVal) {
+            val = newVal
+
+            subject.notify()
+          }
+        })
+        if (typeof val === 'object') {
+          observe(val)
+        }
+      }
+    }
+
+    let id = 0
+    let currentObserver = null
+
+    //创建主题
+    class Subject {
+      constructor() {
+        this.id = id++
+        this.observers = []
+      }
+      addObserver(observer) {
+        this.observers.push(observer)
+      }
+      removeObserver(observer) {
+        var index = this.observers.indexOf(observer)
+        if (index > -1) {
+          this.observers.splice(index, 1)
+        }
+      }
+      notify() {
+        this.observers.forEach(observer => {
+          observer.update()
+        })
+      }
+    }
+
+    //创建观察者
+    class Observer {
+      constructor(vm, key, cb) {
+        this.subjects = {}
+        this.vm = vm
+        this.key = key
+        this.cb = cb
+        this.value = this.getValue()
+      }
+      update() {
+        let oldVal = this.value
+        let value = this.getValue()
+        if (value !== oldVal) {
+          this.value = value
+          this.cb.bind(this.vm)(value, oldVal)
+        }
+      }
+      subscribeTo(subject) {
+        if (!this.subjects[subject.id]) {
+          subject.addObserver(this)
+          this.subjects[subject.id] = subject
+        }
+      }
+      getValue() {
+        currentObserver = this
+        let value = this.vm.$data[this.key]
+        currentObserver = null
+        return value
+      }
+    }
+
+    class Compile {
+      constructor(vm) {
+        this.vm = vm
+        this.node = vm.$el
+        this.compile()
+      }
+      compile() {
+        this.traverse(this.node)
+      }
+      traverse(node) {
+        if (node.nodeType === 1) { //div
+          this.compileNode(node) //解析节点上的 v-model 属性
+          node.childNodes.forEach(childNode => {
+            this.traverse(childNode) //递归
+          })
+        } else if (node.nodeType === 3) { //处理文本
+          this.compileText(node)
+        }
+      }
+      //处理指令
+      compileNode(node) {
+        let attrs = [...node.attributes] //类数组对象转换成数组
+        attrs.forEach(attr => { //attr 是个对象，attr.name 是属性的名字如 v-model， attr.value 是对应的值，如 name
+          if (this.isDirective(attr.name)) {
+            let key = attr.value //attr.value === 'name'
+            node.value = this.vm.$data[key] ////把 data 中 name 属性对应的值赋值给 input 元素
+            new Observer(this.vm, key, function (newVal) {
+              node.value = newVal ////再创建一个观察者，监听到 data 中的数据发生变化时，把新值赋值给 node.value
+            })
+            //把输入内容赋值给 data 中的 name 属性对应的值，data 一更新，所有监听 data 的订阅者就会更新...
+            //因为是箭头函数，所以这里的 this 是 compile 对象
+            node.oninput = (e) => {
+              this.vm.$data[key] = e.target.value
+            }
+          }
+        })
+      }
+      //判断属性名是否是指令，比如 type 就不是指令
+      isDirective(attrName) {
+        return attrName === 'v-model'
+      }
+      compileText(node) {
+        let reg = /{{(.+?)}}/g
+        let match
+        while (match = reg.exec(node.nodeValue)) {
+          let raw = match[0]
+          let key = match[1].trim()
+          node.nodeValue = node.nodeValue.replace(raw, this.vm.$data[key])
+          new Observer(this.vm, key, function (val, oldVal) {
+            node.nodeValue = node.nodeValue.replace(oldVal, val)
+          })
+        }
+      }
+
+    }
+
+    class mvvm {
+      constructor(opts) {
+        this.init(opts)
+        observe(this.$data)
+        new Compile(this) //内容过多，抽离出来
+      }
+      init(opts) {
+        this.$el = document.querySelector(opts.el)
+        this.$data = opts.data
+      }
+    }
+
+    let vm = new mvvm({
+      el: '#app',
+      data: {
+        name: 'zhangsan',
+        age: 3
+      }
+    })
+  </script>
+</body>
+```
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
