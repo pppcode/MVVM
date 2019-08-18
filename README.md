@@ -600,151 +600,153 @@ data 里的name会和视图中的{{name}}一一映射，修改 data 里的值，
     完整代码
 
     ```
-  <div id="app">
-    <h1>{{name}} 's is {{age}}</h1>
-  </div>
+    <body>
+      <div id="app">
+        <h1>{{name}} 's is {{age}}</h1>
+      </div>
 
-  <script>
-    //监听数据
-    function observe(data) {
-      if (!data || typeof data !== 'object') return
-      for (var key in data) {
-        let val = data[key]
-        let subject = new Subject() //局部变量，闭包
-        Object.defineProperty(data, key, {
-          enumerable: true,
-          configurable: true,
-          get: function () {
-            //如果当前观察者存在，去订阅主题
-            if (currentObserver) {
-              currentObserver.subscribeTo(subject)
+      <script>
+        //监听数据
+        function observe(data) {
+          if (!data || typeof data !== 'object') return
+          for (var key in data) {
+            let val = data[key]
+            let subject = new Subject() //局部变量，闭包
+            Object.defineProperty(data, key, {
+              enumerable: true,
+              configurable: true,
+              get: function () {
+                //如果当前观察者存在，去订阅主题
+                if (currentObserver) {
+                  currentObserver.subscribeTo(subject)
+                }
+                return val
+              },
+              set: function(newVal) {
+                val = newVal
+                //告诉订阅这个属性的所有观察者，都去更新
+                subject.notify()
+              }
+            })
+            if(typeof val === 'object') {
+              observe(val)
             }
-            return val
-          },
-          set: function(newVal) {
-            val = newVal
-            //告诉订阅这个属性的所有观察者，都去更新
-            subject.notify()
+          }
+        }
+
+        let id = 0
+        let currentObserver = null
+
+        //创建主题
+        class Subject {
+          constructor() {
+            this.id = id++
+            this.observers = []
+          }
+          addObserver(observer) {
+            this.observers.push(observer)
+          }
+          removeObserver(observer) {
+            var index = this.observers.indexOf(observer)
+            if(index > -1) {
+              this.observers.splice(index, 1)
+            }
+          }
+          notify() {
+            this.observers.forEach(observer => {
+              observer.update() //订阅过我的观察者去执行自己的 update()
+            })
+          }
+        }
+
+        //创建观察者
+        class Observer {
+          constructor(vm, key, cb) {
+            this.subjects = {} //我订阅的主题
+            this.vm = vm //mvvm 对象
+            this.key = key //属性
+            this.cb = cb //订阅之后去做的事情
+            this.value = this.getValue() //获取到真实的值时，去订阅这个主题
+          }
+          update() {
+            let oldVal = this.value //修改前的值
+            let value = this.getValue() //修改后的值，再次调用 get ，get 中的值已是 set 后的值了
+            if(value !== oldVal) {
+              this.value = value //新值赋值给 this.value
+              this.cb.bind(this.vm)(value,oldVal) //调用回调函数，传递 value,oldVal 绑定this为 mvvm 对象
+            }
+          }
+          subscribeTo(subject) {
+            if(!this.subjects[subject.id]) {
+              subject.addObserver(this) //把观察者添加到主题中
+              this.subjects[subject.id] = subject //把主题添加到我的订阅列表中
+            }
+          }
+          getValue() {
+            currentObserver = this //把我变成当前的观察者
+            let value = this.vm.$data[this.key] //调用 observe(data) 中的 get 方法
+            currentObserver = null //我已经订阅过了，所以去掉当前观察者的身份
+            return value
+          }
+        }
+
+
+        class mvvm {
+          constructor(opts) {
+            this.init(opts)
+            observe(this.$data)
+            this.compile()
+          }
+          //初始化，数据暂存起来
+          init(opts) {
+            this.$el = document.querySelector(opts.el)
+            this.$data = opts.data
+            this.observers = []
+          }
+          //对模板进行解析
+          compile() {
+            this.traverse(this.$el)
+          }
+          //遍历模板，可能有多层，需要用到递归
+          traverse(node) {
+            if (node.nodeType === 1) { //div
+              node.childNodes.forEach(childNode => {
+                this.traverse(childNode) //递归
+              })
+            } else if (node.nodeType === 3) { //文本
+              this.renderText(node)
+            }
+          }
+          //渲染模板，替换成真实的数据
+          renderText(node) {
+            let reg = /{{(.+?)}}/g
+            let match
+            while (match = reg.exec(node.nodeValue)) { //循环两次，拿到 [{{name}}, name], [{{age}}, age]
+              let raw = match[0] //{{name}} {{age}}
+              let key = match[1].trim() //name age,删除字符串两端的空白字符
+              node.nodeValue = node.nodeValue.replace(raw, this.$data[key]) //字符串替换成对应的数据
+              //解析模板时，遇到了变量，就创建一个观察者
+              new Observer(this, key, function(val, oldVal) {
+                node.nodeValue = node.nodeValue.replace(oldVal, val) //cb回调函数，新值与旧值做替换
+              })
+            }
+          }
+        }
+
+        let vm = new mvvm({
+          el: '#app',
+          data: {
+            name: 'zhangsan',
+            age: 3
           }
         })
-        if(typeof val === 'object') {
-          observe(val)
-        }
-      }
-    }
 
-    let id = 0
-    let currentObserver = null
-
-    //创建主题
-    class Subject {
-      constructor() {
-        this.id = id++
-        this.observers = []
-      }
-      addObserver(observer) {
-        this.observers.push(observer)
-      }
-      removeObserver(observer) {
-        var index = this.observers.indexOf(observer)
-        if(index > -1) {
-          this.observers.splice(index, 1)
-        }
-      }
-      notify() {
-        this.observers.forEach(observer => {
-          observer.update() //订阅过我的观察者去执行自己的 update()
-        })
-      }
-    }
-
-    //创建观察者
-    class Observer {
-      constructor(vm, key, cb) {
-        this.subjects = {} //我订阅的主题
-        this.vm = vm //mvvm 对象
-        this.key = key //属性
-        this.cb = cb //订阅之后去做的事情
-        this.value = this.getValue() //获取到真实的值时，去订阅这个主题
-      }
-      update() {
-        let oldVal = this.value //修改前的值
-        let value = this.getValue() //修改后的值，再次调用 get ，get 中的值已是 set 后的值了
-        if(value !== oldVal) {
-          this.value = value //新值赋值给 this.value
-          this.cb.bind(this.vm)(value,oldVal) //调用回调函数，传递 value,oldVal 绑定this为 mvvm 对象
-        }
-      }
-      subscribeTo(subject) {
-        if(!this.subjects[subject.id]) {
-          subject.addObserver(this) //把观察者添加到主题中
-          this.subjects[subject.id] = subject //把主题添加到我的订阅列表中
-        }
-      }
-      getValue() {
-        currentObserver = this //把我变成当前的观察者
-        let value = this.vm.$data[this.key] //调用 observe(data) 中的 get 方法
-        currentObserver = null //我已经订阅过了，所以去掉当前观察者的身份
-        return value
-      }
-    }
-
-
-    class mvvm {
-      constructor(opts) {
-        this.init(opts)
-        observe(this.$data)
-        this.compile()
-      }
-      //初始化，数据暂存起来
-      init(opts) {
-        this.$el = document.querySelector(opts.el)
-        this.$data = opts.data
-        this.observers = []
-      }
-      //对模板进行解析
-      compile() {
-        this.traverse(this.$el)
-      }
-      //遍历模板，可能有多层，需要用到递归
-      traverse(node) {
-        if (node.nodeType === 1) { //div
-          node.childNodes.forEach(childNode => {
-            this.traverse(childNode) //递归
-          })
-        } else if (node.nodeType === 3) { //文本
-          this.renderText(node)
-        }
-      }
-      //渲染模板，替换成真实的数据
-      renderText(node) {
-        let reg = /{{(.+?)}}/g
-        let match
-        while (match = reg.exec(node.nodeValue)) { //循环两次，拿到 [{{name}}, name], [{{age}}, age]
-          let raw = match[0] //{{name}} {{age}}
-          let key = match[1].trim() //name age,删除字符串两端的空白字符
-          node.nodeValue = node.nodeValue.replace(raw, this.$data[key]) //字符串替换成对应的数据
-          //解析模板时，遇到了变量，就创建一个观察者
-          new Observer(this, key, function(val, oldVal) {
-            node.nodeValue = node.nodeValue.replace(oldVal, val) //cb回调函数，新值与旧值做替换
-          })
-        }
-      }
-    }
-
-    let vm = new mvvm({
-      el: '#app',
-      data: {
-        name: 'zhangsan',
-        age: 3
-      }
-    })
-
-    //修改数据
-    setInterval(function() {
-      vm.$data.age++
-    },1000)
-  </script>
+        //修改数据
+        setInterval(function() {
+          vm.$data.age++
+        },1000)
+      </script>
+    </body>
     ```
 
 以上就是单向绑定的实现。
