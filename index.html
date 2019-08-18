@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>MVVM 单向绑定</title>
+</head>
+<body>
+  <div id="app">
+    <h1>{{name}} 's is {{age}}</h1>
+  </div>
+
+  <script>
+    class mvvm {
+      constructor(opts) {
+        this.init(opts)
+        this.compile()
+      }
+      //初始化，数据暂存起来
+      init(opts) {
+        this.$el = document.querySelector(opts.el)
+        this.$data = opts.data
+      }
+      //对模板进行解析
+      compile() {
+        this.traverse(this.$el)
+      }
+      //遍历模板，可能有多层，需要用到递归
+      traverse(node) {
+        if(node.nodeType === 1) { //div
+          node.childNodes.forEach(childNode => {
+            this.traverse(childNode) //递归
+          })
+        }else if(node.nodeType === 3) { //文本
+          this.renderText(node)
+        }
+      }
+      //渲染模板，替换成真实的数据
+      renderText(node) {
+        let reg = /{{(.+?)}}/g
+        let match
+        while(match = reg.exec(node.nodeValue)) { //循环两次，拿到 [{{name}}, name], [{{age}}, age]
+          let raw = match[0] //{{name}} {{age}}
+          let key = match[1].trim() //name age,删除字符串两端的空白字符
+          node.nodeValue = node.nodeValue.replace(raw, this.$data[key]) //字符串替换成对应的数据
+        }
+      }
+    }
+
+    let vm = new mvvm({
+      el: '#app',
+      data: {
+        name: 'zhangsan',
+        age: 3
+      }
+    })
+  </script>
+</body>
+</html>
