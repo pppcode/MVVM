@@ -408,6 +408,58 @@ subject.notify()
 
     首先进行初始化，数据暂存起来，执行 compile() 编译模板，遍历节点，如果有子元素的话，再去遍历子元素，直到里面的内容是文本，开始处理文本，把文本做个替换: 正则匹配模板中的{{name}},{{age}},一个个匹配，匹配完后，把里面的 name 换成 以 name 作为属性的值，整体会被换掉，此时用户看到的就是真实的数据了。
 
+```
+<div id="app">
+  <h1>{{name}} 's is {{age}}</h1>
+</div>
+
+<script>
+  class mvvm {
+    constructor(opts) {
+      this.init(opts)
+      this.compile()
+    }
+    //初始化，数据暂存起来
+    init(opts) {
+      this.$el = document.querySelector(opts.el)
+      this.$data = opts.data
+    }
+    //对模板进行解析
+    compile() {
+      this.traverse(this.$el)
+    }
+    //遍历模板，可能有多层，需要用到递归
+    traverse(node) {
+      if(node.nodeType === 1) { //div
+        node.childNodes.forEach(childNode => {
+          this.traverse(childNode) //递归
+        })
+      }else if(node.nodeType === 3) { //文本
+        this.renderText(node)
+      }
+    }
+    //渲染模板，替换成真实的数据
+    renderText(node) {
+      let reg = /{{(.+?)}}/g
+      let match
+      while(match = reg.exec(node.nodeValue)) { //循环两次，拿到 [{{name}}, name], [{{age}}, age]
+        let raw = match[0] //{{name}} {{age}}
+        let key = match[1].trim() //name age,删除字符串两端的空白字符
+        node.nodeValue = node.nodeValue.replace(raw, this.$data[key]) //字符串替换成对应的数据
+      }
+    }
+  }
+
+  let vm = new mvvm({
+    el: '#app',
+    data: {
+      name: 'zhangsan',
+      age: 3
+    }
+  })
+</script>
+```
+
 页面显示：由`{{name}} 's is {{age}}`变为`zhangsan 's is 3`。
 
 问题：用户修改数据后，模板中的 {{name}},{{age}} 怎么进行实时的变动呢？
