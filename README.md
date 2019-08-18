@@ -404,6 +404,18 @@ subject.notify()
 
 ### MVVM 单项绑定的实现
 
+>MVVM (Model-View-ViewModel) 是一种用于把数据和 UI 分离的设计模式。
+>
+>MVVM 中的 Model 表示应用程序使用的数据，比如一个用户账户信息(名字、头像、电子邮件等)。Model 保存信息，但通常不处理行为，不会对信息进行再次加工。数据的格式化是由View 处理的。行为一般认为是业务逻辑，封装再 ViewModel 中。
+>
+>View 是与用户进行交互的桥梁。
+>
+>ViewModel 充当数据转换器，讲 Model 信息转换为 View 的信息，将命令从 View 传递到 Model。
+
+实现的效果：
+
+data 里的name会和视图中的{{name}}一一映射，修改 data 里的值，会直接引起视图中对应数据的变化。
+
 1. 解析并编译模板，字符串替换成数据中对应的值。
 
     首先进行初始化，数据暂存起来，执行 compile() 编译模板，遍历节点，如果有子元素的话，再去遍历子元素，直到里面的内容是文本，开始处理文本，把文本做个替换: 正则匹配模板中的{{name}},{{age}},一个个匹配，匹配完后，把里面的 name 换成 以 name 作为属性的值，整体会被换掉，此时用户看到的就是真实的数据了。
@@ -423,6 +435,7 @@ subject.notify()
     init(opts) {
       this.$el = document.querySelector(opts.el)
       this.$data = opts.data
+      this.observers = []
     }
     //对模板进行解析
     compile() {
@@ -459,10 +472,291 @@ subject.notify()
   })
 </script>
 ```
-
 页面显示：由`{{name}} 's is {{age}}`变为`zhangsan 's is 3`。
 
 问题：用户修改数据后，模板中的 {{name}},{{age}} 怎么进行实时的变动呢？
+
+这里用到上面提到的观察者模式和数据监听。
+
+- 主题(subject): data 中的 name 和 age 属性
+- 观察者(observer): 模板中的 {{name}} 和 {{age}}
+- 观察者何时订阅主题: 当一开始执行 mvvm 初始化(根据 el 解析模板发现 {{name}})的时候订阅主题
+- 主题何时通知更新: 当data.name发生改变的时候，通知观察者更新内容。 我们可以在一开始监控 data.name （Object.defineProperty(data, 'name', {...})），当用户修改 data.name 的时候调用主题的 subject.notify。
+
+2. 修改数据，模板中的内容进行实时变动
+
+    在模板解析的过程中，解析到 {{name}} 了，创建一个观察者，这个观察者就观察 name 这个属性，解析到 {{age}} 了，又创建一个观察者，这个观察者就观察 age 这个属性
+
+    ```
+      renderText(node) {
+          ...
+          //解析模板时，遇到了变量，就创建一个观察者,观察这个属性的变化，去执行 cb
+          new Observer(this, key, cb)  
+        }
+      }
+    ```
+
+    创建观察者后，什么时候去观察这个主题呢？
+
+    创建了 observer 后立刻去观察这个主题，可是主题在哪，主题什么时候创建的呢
+
+    主题是 observe(data) 时，遍历这个数据时创建的，主题在这里，问题是怎么找到对应的主题呢（找不到，都存在内存中，都是局部变量，外面访问不到），所以不可能创建完成后，立刻去订阅这个主题
+
+    所以在创建这个观察者时，通过调用 this.getValue()
+
+    1. 把我设置成独一无二的场外最高的权限的一个观察者，全球唯一的观察者，因为观察者很多，每遇到个这个符号，就创建一个，所以到了我时，把我设置为全局最高的。
+    2. 此时key 就是我需要订阅的这个属性，调用 this.vm.$data[this.key] 时，就是调用了 get ，currentObserver是存在的，这个观察者开始订阅这个主题，那么这个主题在哪，使用了闭包,这个主题往上找，找到之前创造的主题，否则的话根本就找不到这里创建的主题（若还有递归的话，主题会嵌套很多层，每个属性都有个主题），找到的原因就是：在创建的过程中 调用一次 get ，好了，同时也得到了这个值，完成了订阅主题。
+    3. 订阅过之后，设置为 null ，不是最高观察者了，因为我已经订阅过主题了，主题已经在我的 this.subjects 里了，同时 subjects 里也有我了。
+
+    ```
+    //监听数据
+    function observe(data) {
+      if (!data || typeof data !== 'object') return
+      for (var key in data) {
+        let val = data[key]
+        let subject = new Subject() //局部变量，闭包
+        Object.defineProperty(data, key, {
+          enumerable: true,
+          configurable: true,
+          get: function () {
+            //如果当前观察者存在，去订阅主题
+            if (currentObserver) {
+              currentObserver.subscribeTo(subject)
+            }
+            return val
+          }
+        })
+        if(typeof val === 'object') {
+          observe(val)
+        }
+      }
+    }
+
+    let id = 0
+    let currentObserver = null
+
+    //创建主题
+    class Subject {
+      constructor() {
+        this.id = id++
+        this.observers = []
+      }
+      addObserver(observer) {
+        this.observers.push(observer)
+      }
+      removeObserver(observer) {
+        var index = this.observers.indexOf(observer)
+        if(index > -1) {
+          this.observers.splice(index, 1)
+        }
+      }
+    }
+
+    //创建观察者
+    class Observer {
+      constructor(vm, key, cb) {
+        this.subjects = {} //我订阅的主题
+        this.vm = vm //mvvm 对象
+        this.key = key //属性
+        this.cb = cb //订阅之后去做的事情
+        this.value = this.getValue() //获取到真实的值时，去订阅这个主题
+      }
+      subscribeTo(subject) {
+        if(!this.subjects[subject.id]) {
+          subject.addObserver(this) //把观察者添加到主题中
+          this.subjects[subject.id] = subject //把主题添加到我的订阅列表中
+        }
+      }
+      getValue() {
+        currentObserver = this //把我变成当前的观察者
+        let value = this.vm.$data[this.key] //调用 observe(data) 中的 get 方法
+        currentObserver = null //我已经订阅过了，所以去掉当前观察者的身份
+        return value
+      }
+    }
+    
+    class mvvm {
+      constructor(opts) {
+        ...
+        observe(this.$data)
+      }
+      init(opts) {
+        ...
+        this.observers = []
+      }
+      renderText(node) {
+        ...
+        new Observer(this, key, cb)
+      }
+    }
+    ```
+
+    以上是解析 {{name}} 时，创建了一个观察者所做的事情
+
+    解析 {{age}} 时，创建一个观察者，创建的过程中，调用 this.value 时，把这个观察者设置为最高观察者， 获取 this.vm.$data[this.key] 再调用 get ，把他订阅到了当前的 age 主题。
+
+    现在，所有的这些符号都订阅了自己的主题(数据)，当主题(数据)更新时，调用 set 方法,再调用 subject.notify()，再调用 observer.update()，在调用 update(),执行回调，执行了 new Observer() 中回调：数据替换。
+
+    完整代码
+
+    ```
+  <div id="app">
+    <h1>{{name}} 's is {{age}}</h1>
+  </div>
+
+  <script>
+    //监听数据
+    function observe(data) {
+      if (!data || typeof data !== 'object') return
+      for (var key in data) {
+        let val = data[key]
+        let subject = new Subject() //局部变量，闭包
+        Object.defineProperty(data, key, {
+          enumerable: true,
+          configurable: true,
+          get: function () {
+            //如果当前观察者存在，去订阅主题
+            if (currentObserver) {
+              currentObserver.subscribeTo(subject)
+            }
+            return val
+          },
+          set: function(newVal) {
+            val = newVal
+            //告诉订阅这个属性的所有观察者，都去更新
+            subject.notify()
+          }
+        })
+        if(typeof val === 'object') {
+          observe(val)
+        }
+      }
+    }
+
+    let id = 0
+    let currentObserver = null
+
+    //创建主题
+    class Subject {
+      constructor() {
+        this.id = id++
+        this.observers = []
+      }
+      addObserver(observer) {
+        this.observers.push(observer)
+      }
+      removeObserver(observer) {
+        var index = this.observers.indexOf(observer)
+        if(index > -1) {
+          this.observers.splice(index, 1)
+        }
+      }
+      notify() {
+        this.observers.forEach(observer => {
+          observer.update() //订阅过我的观察者去执行自己的 update()
+        })
+      }
+    }
+
+    //创建观察者
+    class Observer {
+      constructor(vm, key, cb) {
+        this.subjects = {} //我订阅的主题
+        this.vm = vm //mvvm 对象
+        this.key = key //属性
+        this.cb = cb //订阅之后去做的事情
+        this.value = this.getValue() //获取到真实的值时，去订阅这个主题
+      }
+      update() {
+        let oldVal = this.value //修改前的值
+        let value = this.getValue() //修改后的值，再次调用 get ，get 中的值已是 set 后的值了
+        if(value !== oldVal) {
+          this.value = value //新值赋值给 this.value
+          this.cb.bind(this.vm)(value,oldVal) //调用回调函数，传递 value,oldVal 绑定this为 mvvm 对象
+        }
+      }
+      subscribeTo(subject) {
+        if(!this.subjects[subject.id]) {
+          subject.addObserver(this) //把观察者添加到主题中
+          this.subjects[subject.id] = subject //把主题添加到我的订阅列表中
+        }
+      }
+      getValue() {
+        currentObserver = this //把我变成当前的观察者
+        let value = this.vm.$data[this.key] //调用 observe(data) 中的 get 方法
+        currentObserver = null //我已经订阅过了，所以去掉当前观察者的身份
+        return value
+      }
+    }
+
+
+    class mvvm {
+      constructor(opts) {
+        this.init(opts)
+        observe(this.$data)
+        this.compile()
+      }
+      //初始化，数据暂存起来
+      init(opts) {
+        this.$el = document.querySelector(opts.el)
+        this.$data = opts.data
+        this.observers = []
+      }
+      //对模板进行解析
+      compile() {
+        this.traverse(this.$el)
+      }
+      //遍历模板，可能有多层，需要用到递归
+      traverse(node) {
+        if (node.nodeType === 1) { //div
+          node.childNodes.forEach(childNode => {
+            this.traverse(childNode) //递归
+          })
+        } else if (node.nodeType === 3) { //文本
+          this.renderText(node)
+        }
+      }
+      //渲染模板，替换成真实的数据
+      renderText(node) {
+        let reg = /{{(.+?)}}/g
+        let match
+        while (match = reg.exec(node.nodeValue)) { //循环两次，拿到 [{{name}}, name], [{{age}}, age]
+          let raw = match[0] //{{name}} {{age}}
+          let key = match[1].trim() //name age,删除字符串两端的空白字符
+          node.nodeValue = node.nodeValue.replace(raw, this.$data[key]) //字符串替换成对应的数据
+          //解析模板时，遇到了变量，就创建一个观察者
+          new Observer(this, key, function(val, oldVal) {
+            node.nodeValue = node.nodeValue.replace(oldVal, val) //cb回调函数，新值与旧值做替换
+          })
+        }
+      }
+    }
+
+    let vm = new mvvm({
+      el: '#app',
+      data: {
+        name: 'zhangsan',
+        age: 3
+      }
+    })
+
+    //修改数据
+    setInterval(function() {
+      vm.$data.age++
+    },1000)
+  </script>
+    ```
+
+以上就是单向绑定的实现。
+
+
+
+
+
+
+
+
+
 
 
 
